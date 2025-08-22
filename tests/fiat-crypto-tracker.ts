@@ -30,7 +30,7 @@ describe("exchange-rate-tracker", () => {
     // Initialize the main rate data account
     const tx = await program.methods
       .initialize()
-      .accounts({
+      .accountsStrict({
         rateData: rateDataAccount.publicKey,
         authority: authority,
         systemProgram: anchor.web3.SystemProgram.programId,
@@ -52,7 +52,7 @@ describe("exchange-rate-tracker", () => {
     const oracleName = "Parallel Market";
     await program.methods
       .addOracle(oracleName, oracle1.publicKey)
-      .accounts({
+      .accountsStrict({
         rateData: rateDataAccount.publicKey,
         authority: authority,
       })
@@ -74,7 +74,7 @@ describe("exchange-rate-tracker", () => {
       // Attempt to add the same oracle again
       await program.methods
         .addOracle("Duplicate Oracle", oracle1.publicKey)
-        .accounts({
+        .accountsStrict({
           rateData: rateDataAccount.publicKey,
           authority: authority,
         })
