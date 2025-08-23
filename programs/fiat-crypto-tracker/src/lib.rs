@@ -1,4 +1,12 @@
 use anchor_lang::prelude::*;
+use ephemeral_rollups_sdk::{
+    cpi::{
+        accounts::{DelegateAccounts, UndelegateAccounts},
+        delegate_account, undelegate_account, DelegateConfig,
+    },
+    Delegation,
+};
+
 
 declare_id!("2Q4J9MoBr6eM8jBBzPcDbSTfG7rKLsm68mYDDLfDZ5kE");
 
