@@ -1,4 +1,12 @@
 use anchor_lang::prelude::*;
+// Corrected imports to match the SDK's structure and resolve dependency conflicts
+use ephemeral_rollups_sdk::{
+    cpi::{
+        accounts::{DelegateAccounts, UndelegateAccounts},
+        delegate_account, undelegate_account, DelegateConfig,
+    },
+    program::Delegation,
+};
 
 declare_id!("2Q4J9MoBr6eM8jBBzPcDbSTfG7rKLsm68mYDDLfDZ5kE");
 
@@ -6,8 +14,7 @@ declare_id!("2Q4J9MoBr6eM8jBBzPcDbSTfG7rKLsm68mYDDLfDZ5kE");
 pub mod exchange_rate_tracker {
     use super::*;
 
-    // Initializes the main data account that will store the exchange rates.
-    // This only needs to be called once when deploying the program.
+    // This instruction now creates a PDA for the rate_data account, which is required for delegation
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         let rate_data = &mut ctx.accounts.rate_data;
         rate_data.authority = *ctx.accounts.authority.key;
@@ -16,105 +23,186 @@ pub mod exchange_rate_tracker {
         Ok(())
     }
 
-    // Adds a new oracle (data source) to the tracker.
-    // Only the program's authority can add new oracles.
-    // Oracles are identified by a name (e.g., "Parallel Market") and their public key.
+    // This instruction remains unchanged
     pub fn add_oracle(ctx: Context<ManageOracle>, name: String, oracle_pubkey: Pubkey) -> Result<()> {
         let rate_data = &mut ctx.accounts.rate_data;
-
-        // Check if an oracle with the same public key already exists to prevent duplicates.
         if rate_data.oracles.iter().any(|o| o.pubkey == oracle_pubkey) {
             return err!(ErrorCode::OracleAlreadyExists);
         }
-
-        // Create and add the new oracle to the list.
         let new_oracle = Oracle {
             name,
             pubkey: oracle_pubkey,
-            rate: 0, // Initialize rate to 0
-            last_updated: 0, // Initialize last updated timestamp to 0
+            rate: 0,
+            last_updated: 0,
         };
         rate_data.oracles.push(new_oracle);
         msg!("Oracle {} with pubkey {} added.", rate_data.oracles.last().unwrap().name, oracle_pubkey);
         Ok(())
     }
 
-    // Allows a registered oracle to update the exchange rate.
-    // The transaction must be signed by the oracle's key.
+    // This instruction remains unchanged. It can be called on Solana or the ER.
     pub fn update_rate(ctx: Context<UpdateRate>, new_rate: u64) -> Result<()> {
         let rate_data = &mut ctx.accounts.rate_data;
         let oracle_signer = &ctx.accounts.oracle;
         let clock = Clock::get()?;
-
-        // Find the oracle in the list that matches the signer's public key.
         if let Some(oracle) = rate_data.oracles.iter_mut().find(|o| o.pubkey == *oracle_signer.key) {
             oracle.rate = new_rate;
             oracle.last_updated = clock.unix_timestamp;
             msg!("Rate updated by {}: 1 USD = {} NGN", oracle.name, new_rate);
         } else {
-            // If the signer is not a registered oracle, return an error.
             return err!(ErrorCode::UnauthorizedOracle);
         }
+        Ok(())
+    }
 
+    // --- DELEGATE INSTRUCTION (MANUAL CPI) ---
+    // The DelegateConfig is now created inside the function to avoid Borsh conflicts.
+    pub fn delegate(ctx: Context<DelegateRateData>) -> Result<()> {
+        msg!("Delegating rate data account to Ephemeral Rollup...");
+        
+        let cpi_program = ctx.accounts.delegation_program.to_account_info();
+        let cpi_accounts = DelegateAccounts {
+            pda: ctx.accounts.rate_data.to_account_info(),
+            owner_program: ctx.accounts.owner_program.to_account_info(),
+            payer: ctx.accounts.authority.to_account_info(),
+            buffer: ctx.accounts.buffer.to_account_info(),
+            delegation_record: ctx.accounts.delegation_record.to_account_info(),
+            delegation_metadata: ctx.accounts.delegation_metadata.to_account_info(),
+            delegation_program: ctx.accounts.delegation_program.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+        };
+
+        let bump = ctx.bumps.rate_data;
+        let seeds = &[&b"rate_data"[..], &[bump]];
+        
+        // Create the config here, now aligned with the older SDK version
+        let config = DelegateConfig {
+            commit_frequency_ms: 1000, // Commit state every 1 second (removed Some())
+            validator: Some(*ctx.accounts.authority.key), // Wrapped in Some() to match expected type
+        };
+
+        // The function call now requires the seeds as a third argument
+        delegate_account(
+            CpiContext::new_with_signer(cpi_program, cpi_accounts, &[&seeds[..]]),
+            config,
+            &[&seeds[..]],
+        )?;
+
+        Ok(())
+    }
+
+    // --- UNDELEGATE INSTRUCTION (MANUAL CPI) ---
+    pub fn undelegate(ctx: Context<UndelegateRateData>) -> Result<()> {
+        msg!("Undelegating rate data account from Ephemeral Rollup...");
+
+        let cpi_program = ctx.accounts.delegation_program.to_account_info();
+        let cpi_accounts = UndelegateAccounts {
+            pda: ctx.accounts.rate_data.to_account_info(),
+            owner_program: ctx.accounts.owner_program.to_account_info(),
+            payer: ctx.accounts.authority.to_account_info(),
+            delegation_record: ctx.accounts.delegation_record.to_account_info(),
+            delegation_program: ctx.accounts.delegation_program.to_account_info(),
+            system_program: ctx.accounts.system_program.to_account_info(),
+        };
+
+        let bump = ctx.bumps.rate_data;
+        let seeds = &[&b"rate_data"[..], &[bump]];
+
+        undelegate_account(
+            CpiContext::new_with_signer(cpi_program, cpi_accounts, &[&seeds[..]]),
+        )?;
+        
         Ok(())
     }
 }
 
-// ========== ACCOUNTS & STRUCTS ==========
+// --- ACCOUNTS & STRUCTS ---
 
-// Context for the `initialize` instruction.
+// Initialize now creates a PDA, which is required for the program to sign for delegation
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    // The account that will hold all the rate data.
-    // `init` creates the account, `payer` is the user paying for it,
-    // and `space` allocates memory. 8 + 32 is for the discriminator and authority pubkey.
-    // We add 1024 bytes for oracle data, which can be adjusted as needed.
-    #[account(init, payer = authority, space = 8 + 32 + 1024)]
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 32 + 1024,
+        seeds = [b"rate_data"],
+        bump
+    )]
     pub rate_data: Account<'info, RateData>,
-    // The authority who is initializing the program (and will manage oracles).
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
-// Context for adding or removing oracles.
+// All subsequent account contexts must now access the PDA via seeds
 #[derive(Accounts)]
 pub struct ManageOracle<'info> {
-    // The data account, which must be mutable to add a new oracle.
-    #[account(mut, has_one = authority)]
+    #[account(mut, has_one = authority, seeds = [b"rate_data"], bump)]
     pub rate_data: Account<'info, RateData>,
-    // The authority of the program. The signature is checked by `has_one`.
     pub authority: Signer<'info>,
 }
 
-// Context for an oracle updating a rate.
 #[derive(Accounts)]
 pub struct UpdateRate<'info> {
-    // The data account must be mutable to update the rate.
-    #[account(mut)]
+    #[account(mut, seeds = [b"rate_data"], bump)]
     pub rate_data: Account<'info, RateData>,
-    // The oracle updating the rate. Their signature is required.
     pub oracle: Signer<'info>,
 }
 
-// The main account that stores the list of oracles and their data.
+// --- CONTEXTS FOR MANUAL DELEGATION CPI ---
+// The instruction attribute has been removed as we no longer pass the config
+#[derive(Accounts)]
+pub struct DelegateRateData<'info> {
+    #[account(mut, has_one = authority, seeds = [b"rate_data"], bump)]
+    pub rate_data: Account<'info, RateData>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    /// CHECK: This is the exchange_rate_tracker program itself.
+    pub owner_program: AccountInfo<'info>,
+    pub delegation_program: Program<'info, Delegation>,
+    pub system_program: Program<'info, System>,
+    // --- Added accounts required by the MagicBlock CPI ---
+    /// CHECK: This account is created and managed by the delegation program
+    #[account(mut)]
+    pub buffer: AccountInfo<'info>,
+    /// CHECK: This account is created and managed by the delegation program
+    #[account(mut)]
+    pub delegation_record: AccountInfo<'info>,
+    /// CHECK: This account is created and managed by the delegation program
+    #[account(mut)]
+    pub delegation_metadata: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UndelegateRateData<'info> {
+    #[account(mut, has_one = authority, seeds = [b"rate_data"], bump)]
+    pub rate_data: Account<'info, RateData>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    /// CHECK: This is the exchange_rate_tracker program itself.
+    pub owner_program: AccountInfo<'info>,
+    pub delegation_program: Program<'info, Delegation>,
+    pub system_program: Program<'info, System>,
+    // --- Added accounts required by the MagicBlock CPI ---
+    /// CHECK: This account is created and managed by the delegation program
+    #[account(mut)]
+    pub delegation_record: AccountInfo<'info>,
+}
+
+
 #[account]
 pub struct RateData {
     pub authority: Pubkey,
     pub oracles: Vec<Oracle>,
 }
 
-// Represents a single data source (e.g., a bank, parallel market).
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug)]
 pub struct Oracle {
-    pub name: String,       // e.g., "Bank A", "Crypto Exchange"
-    pub pubkey: Pubkey,     // The public key of the oracle allowed to update this rate
-    pub rate: u64,          // The USD/NGN rate (e.g., 1450)
-    pub last_updated: i64,  // Unix timestamp of the last update
+    pub name: String,
+    pub pubkey: Pubkey,
+    pub rate: u64,
+    pub last_updated: i64,
 }
-
-
-// ========== ERRORS ==========
 
 #[error_code]
 pub enum ErrorCode {
