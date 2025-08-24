@@ -7,7 +7,6 @@ use ephemeral_rollups_sdk::{
     },
     program::Delegation,
 };
-
 declare_id!("2Q4J9MoBr6eM8jBBzPcDbSTfG7rKLsm68mYDDLfDZ5kE");
 
 #[program]
