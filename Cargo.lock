@@ -537,6 +537,7 @@ version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8cbbeb04cc19538bf6d77a1aedbcc1f10f3b9119750f63376a63ccdac363a38"
 dependencies = [
+ "anchor-lang",
  "borsh 1.5.7",
  "ephemeral-rollups-sdk-attribute-commit",
  "ephemeral-rollups-sdk-attribute-delegate",
