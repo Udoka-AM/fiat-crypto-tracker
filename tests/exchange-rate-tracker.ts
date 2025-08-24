@@ -2,6 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { ExchangeRateTracker } from "../target/types/exchange_rate_tracker";
 import { assert } from "chai";
+import { PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
 describe("exchange-rate-tracker", () => {
@@ -12,21 +13,25 @@ describe("exchange-rate-tracker", () => {
   const program = anchor.workspace.ExchangeRateTracker as Program<ExchangeRateTracker>;
   const authority = provider.wallet.publicKey;
 
-  // Keypair for the main data account
-  const rateDataAccount = anchor.web3.Keypair.generate();
-  console.log("Your Rate Data Account Pubkey is:", rateDataAccount.publicKey.toBase58());
+  // --- PDA CALCULATION ---
+  // Find the PDA for the rate_data account. This is now a deterministic address.
+  const [rateDataPDA, _] = PublicKey.findProgramAddressSync(
+    [Buffer.from("rate_data")],
+    program.programId
+  );
+
+  console.log("Your Rate Data PDA is:", rateDataPDA.toBase58());
 
   // Keypairs for your two specific oracles
   const exchangeRateApiKeypair = anchor.web3.Keypair.generate();
   const binanceApiKeypair = anchor.web3.Keypair.generate();
+  
+  // You will need these secret keys for your .env file
   console.log("ExchangeRate-API Oracle SECRET Key:", bs58.encode(exchangeRateApiKeypair.secretKey));
   console.log("Binance Oracle SECRET Key:", bs58.encode(binanceApiKeypair.secretKey));
   
   console.log("ExchangeRate-API Oracle Pubkey:", exchangeRateApiKeypair.publicKey.toBase58());
   console.log("Binance Oracle Pubkey:", binanceApiKeypair.publicKey.toBase58());
-
-  
-
 
   // Keypair for an unauthorized account
   const unauthorizedUser = anchor.web3.Keypair.generate();
@@ -37,21 +42,21 @@ describe("exchange-rate-tracker", () => {
     await provider.connection.requestAirdrop(binanceApiKeypair.publicKey, 1 * anchor.web3.LAMPORTS_PER_SOL);
     await provider.connection.requestAirdrop(unauthorizedUser.publicKey, 1 * anchor.web3.LAMPORTS_PER_SOL);
 
-    // Initialize the main rate data account
+    // Initialize the main rate data account using its PDA
     const tx = await program.methods
       .initialize()
       .accounts({
-        rateData: rateDataAccount.publicKey,
+        rateData: rateDataPDA, // Use the PDA address
         authority: authority,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
-      .signers([rateDataAccount])
+      // The PDA account keypair is no longer needed as a signer
       .rpc();
 
     console.log("Your transaction signature", tx);
 
     // Fetch the created account
-    const account = await program.account.rateData.fetch(rateDataAccount.publicKey);
+    const account = await program.account.rateData.fetch(rateDataPDA);
     
     // Assert that the authority is set correctly and the oracles list is empty
     assert.ok(account.authority.equals(authority));
@@ -63,7 +68,7 @@ describe("exchange-rate-tracker", () => {
     await program.methods
       .addOracle("ExchangeRate-API", exchangeRateApiKeypair.publicKey)
       .accounts({
-        rateData: rateDataAccount.publicKey,
+        rateData: rateDataPDA,
         authority: authority,
       })
       .rpc();
@@ -72,13 +77,13 @@ describe("exchange-rate-tracker", () => {
     await program.methods
       .addOracle("Binance", binanceApiKeypair.publicKey)
       .accounts({
-        rateData: rateDataAccount.publicKey,
+        rateData: rateDataPDA,
         authority: authority,
       })
       .rpc();
 
     // Fetch the account again to check the new oracles
-    const account = await program.account.rateData.fetch(rateDataAccount.publicKey);
+    const account = await program.account.rateData.fetch(rateDataPDA);
     
     // Assert that there are now two oracles in the list
     assert.lengthOf(account.oracles, 2);
@@ -100,13 +105,13 @@ describe("exchange-rate-tracker", () => {
     await program.methods
       .updateRate(newRate)
       .accounts({
-        rateData: rateDataAccount.publicKey,
+        rateData: rateDataPDA,
         oracle: exchangeRateApiKeypair.publicKey,
       })
       .signers([exchangeRateApiKeypair]) // The oracle must sign the transaction
       .rpc();
 
-    const account = await program.account.rateData.fetch(rateDataAccount.publicKey);
+    const account = await program.account.rateData.fetch(rateDataPDA);
     const updatedOracle = account.oracles.find(o => o.pubkey.equals(exchangeRateApiKeypair.publicKey));
 
     assert.isDefined(updatedOracle);
@@ -118,13 +123,13 @@ describe("exchange-rate-tracker", () => {
     await program.methods
       .updateRate(newRate)
       .accounts({
-        rateData: rateDataAccount.publicKey,
+        rateData: rateDataPDA,
         oracle: binanceApiKeypair.publicKey,
       })
       .signers([binanceApiKeypair]) // The oracle must sign the transaction
       .rpc();
 
-    const account = await program.account.rateData.fetch(rateDataAccount.publicKey);
+    const account = await program.account.rateData.fetch(rateDataPDA);
     const updatedOracle = account.oracles.find(o => o.pubkey.equals(binanceApiKeypair.publicKey));
 
     assert.isDefined(updatedOracle);
@@ -139,7 +144,7 @@ describe("exchange-rate-tracker", () => {
       await program.methods
         .updateRate(newRate)
         .accounts({
-          rateData: rateDataAccount.publicKey,
+          rateData: rateDataPDA,
           oracle: unauthorizedUser.publicKey,
         })
         .signers([unauthorizedUser])

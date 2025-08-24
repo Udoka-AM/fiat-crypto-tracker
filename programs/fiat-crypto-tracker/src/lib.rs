@@ -65,11 +65,14 @@ pub mod exchange_rate_tracker {
 // Context for the `initialize` instruction.
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    // The account that will hold all the rate data.
-    // `init` creates the account, `payer` is the user paying for it,
-    // and `space` allocates memory. 8 + 32 is for the discriminator and authority pubkey.
-    // We add 1024 bytes for oracle data, which can be adjusted as needed.
-    #[account(init, payer = authority, space = 8 + 32 + 1024)]
+    // The account is now a PDA, initialized with seeds and a bump.
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + 32 + 1024,
+        seeds = [b"rate_data"],
+        bump
+    )]
     pub rate_data: Account<'info, RateData>,
     // The authority who is initializing the program (and will manage oracles).
     #[account(mut)]
@@ -80,8 +83,8 @@ pub struct Initialize<'info> {
 // Context for adding or removing oracles.
 #[derive(Accounts)]
 pub struct ManageOracle<'info> {
-    // The data account, which must be mutable to add a new oracle.
-    #[account(mut, has_one = authority)]
+    // This now accesses the PDA using the same seeds and bump.
+    #[account(mut, has_one = authority, seeds = [b"rate_data"], bump)]
     pub rate_data: Account<'info, RateData>,
     // The authority of the program. The signature is checked by `has_one`.
     pub authority: Signer<'info>,
@@ -90,8 +93,8 @@ pub struct ManageOracle<'info> {
 // Context for an oracle updating a rate.
 #[derive(Accounts)]
 pub struct UpdateRate<'info> {
-    // The data account must be mutable to update the rate.
-    #[account(mut)]
+    // This also accesses the PDA using the same seeds and bump.
+    #[account(mut, seeds = [b"rate_data"], bump)]
     pub rate_data: Account<'info, RateData>,
     // The oracle updating the rate. Their signature is required.
     pub oracle: Signer<'info>,
