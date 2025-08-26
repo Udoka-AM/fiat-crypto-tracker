@@ -1,20 +1,16 @@
 use anchor_lang::prelude::*;
-use ephemeral_rollups_sdk::{
-    cpi::{
-        accounts::{DelegateAccounts, UndelegateAccounts},
-        delegate_account, undelegate_account, DelegateConfig,
-    },
-    Delegation,
-};
-
+use ephemeral_rollups_sdk::anchor::{delegate, ephemeral, undelegate};
+use ephemeral_rollups_sdk::cpi::DelegateConfig;
+use std::str::FromStr; // Required to parse the validator key string
 
 declare_id!("2Q4J9MoBr6eM8jBBzPcDbSTfG7rKLsm68mYDDLfDZ5kE");
 
 #[program]
+#[ephemeral] 
 pub mod exchange_rate_tracker {
     use super::*;
 
-    // This instruction now creates a PDA for the rate_data account, which is required for delegation
+    // PDA initializer
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         let rate_data = &mut ctx.accounts.rate_data;
         rate_data.authority = *ctx.accounts.authority.key;
@@ -23,7 +19,7 @@ pub mod exchange_rate_tracker {
         Ok(())
     }
 
-    // This instruction remains unchanged
+    // Adds Oracle
     pub fn add_oracle(ctx: Context<ManageOracle>, name: String, oracle_pubkey: Pubkey) -> Result<()> {
         let rate_data = &mut ctx.accounts.rate_data;
         if rate_data.oracles.iter().any(|o| o.pubkey == oracle_pubkey) {
@@ -40,7 +36,7 @@ pub mod exchange_rate_tracker {
         Ok(())
     }
 
-    // This instruction remains unchanged. It can be called on Solana or the ER.
+    // Updates Oracle
     pub fn update_rate(ctx: Context<UpdateRate>, new_rate: u64) -> Result<()> {
         let rate_data = &mut ctx.accounts.rate_data;
         let oracle_signer = &ctx.accounts.oracle;
@@ -55,61 +51,32 @@ pub mod exchange_rate_tracker {
         Ok(())
     }
 
-    // --- DELEGATE INSTRUCTION (MANUAL CPI) ---
-    pub fn delegate(ctx: Context<DelegateRateData>, config: DelegateConfig) -> Result<()> {
+    // --- DELEGATE INSTRUCTION (MACRO-BASED) ---
+    #[delegate]
+    pub fn delegate(ctx: Context<DelegateRateData>) -> Result<()> {
         msg!("Delegating rate data account to Ephemeral Rollup...");
         
-        let cpi_program = ctx.accounts.delegation_program.to_account_info();
-        let cpi_accounts = DelegateAccounts {
-            pda: ctx.accounts.rate_data.to_account_info(),
-            owner_program: ctx.accounts.owner_program.to_account_info(),
-            payer: ctx.accounts.authority.to_account_info(),
-            buffer: ctx.accounts.buffer.to_account_info(),
-            delegation_record: ctx.accounts.delegation_record.to_account_info(),
-            delegation_metadata: ctx.accounts.delegation_metadata.to_account_info(),
-            delegation_program: ctx.accounts.delegation_program.to_account_info(),
-            system_program: ctx.accounts.system_program.to_account_info(),
+        // The config => hardcoded validator key
+        let config = DelegateConfig {
+            commit_frequency_ms: 1000,
+            validator: Some(Pubkey::from_str("J1tTgaa3z5D2s4gW2x2yZ2x2yZ2x2yZ2x2yZ2x2yZ2x2y").unwrap()), 
         };
-
-        let bump = ctx.bumps.rate_data;
-        let seeds = &[&b"rate_data"[..], &[bump]];
         
-        delegate_account(
-            CpiContext::new_with_signer(cpi_program, cpi_accounts, &[&seeds[..]]),
-            config,
-        )?;
-
-        Ok(())
+        ctx.accounts.del.delegate(config)
     }
 
-    // --- UNDELEGATE INSTRUCTION (MANUAL CPI) ---
-    pub fn undelegate(ctx: Context<UndelegateRateData>) -> Result<()> {
+    // --- UNDELEGATE INSTRUCTION (MACRO-BASED) ---
+    #[undelegate]
+    pub fn undelegate(_ctx: Context<UndelegateRateData>) -> Result<()> {
         msg!("Undelegating rate data account from Ephemeral Rollup...");
-
-        let cpi_program = ctx.accounts.delegation_program.to_account_info();
-        let cpi_accounts = UndelegateAccounts {
-            pda: ctx.accounts.rate_data.to_account_info(),
-            owner_program: ctx.accounts.owner_program.to_account_info(),
-            payer: ctx.accounts.authority.to_account_info(),
-            delegation_record: ctx.accounts.delegation_record.to_account_info(),
-            delegation_program: ctx.accounts.delegation_program.to_account_info(),
-            system_program: ctx.accounts.system_program.to_account_info(),
-        };
-
-        let bump = ctx.bumps.rate_data;
-        let seeds = &[&b"rate_data"[..], &[bump]];
-
-        undelegate_account(
-            CpiContext::new_with_signer(cpi_program, cpi_accounts, &[&seeds[..]]),
-        )?;
-        
         Ok(())
     }
 }
 
-// --- ACCOUNTS & STRUCTS ---
 
-// Initialize now creates a PDA, which is required for the program to sign for delegation
+
+// ========== ACCOUNTS & STRUCTS ==========
+
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(
@@ -125,7 +92,6 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
-// All subsequent account contexts must now access the PDA via seeds
 #[derive(Accounts)]
 pub struct ManageOracle<'info> {
     #[account(mut, has_one = authority, seeds = [b"rate_data"], bump)]
@@ -140,47 +106,23 @@ pub struct UpdateRate<'info> {
     pub oracle: Signer<'info>,
 }
 
-// --- CONTEXTS FOR MANUAL DELEGATION CPI ---
+// --- DELEGATION CONTEXTS ---
 
-#[derive(Accounts)]
-#[instruction(config: DelegateConfig)]
+#[derive(Accounts, Delegate)]
 pub struct DelegateRateData<'info> {
     #[account(mut, has_one = authority, seeds = [b"rate_data"], bump)]
-    pub rate_data: Account<'info, RateData>,
+    pub del: Account<'info, RateData>,
     #[account(mut)]
     pub authority: Signer<'info>,
-    /// CHECK: This is the exchange_rate_tracker program itself.
-    pub owner_program: AccountInfo<'info>,
-    pub delegation_program: Program<'info, Delegation>,
-    pub system_program: Program<'info, System>,
-    // --- Added accounts required by the MagicBlock CPI ---
-    /// CHECK: This account is created and managed by the delegation program
-    #[account(mut)]
-    pub buffer: AccountInfo<'info>,
-    /// CHECK: This account is created and managed by the delegation program
-    #[account(mut)]
-    pub delegation_record: AccountInfo<'info>,
-    /// CHECK: This account is created and managed by the delegation program
-    #[account(mut)]
-    pub delegation_metadata: AccountInfo<'info>,
 }
 
-#[derive(Accounts)]
+#[derive(Accounts, Undelegate)]
 pub struct UndelegateRateData<'info> {
     #[account(mut, has_one = authority, seeds = [b"rate_data"], bump)]
-    pub rate_data: Account<'info, RateData>,
+    pub del: Account<'info, RateData>,
     #[account(mut)]
     pub authority: Signer<'info>,
-    /// CHECK: This is the exchange_rate_tracker program itself.
-    pub owner_program: AccountInfo<'info>,
-    pub delegation_program: Program<'info, Delegation>,
-    pub system_program: Program<'info, System>,
-    // --- Added accounts required by the MagicBlock CPI ---
-    /// CHECK: This account is created and managed by the delegation program
-    #[account(mut)]
-    pub delegation_record: AccountInfo<'info>,
 }
-
 
 #[account]
 pub struct RateData {
