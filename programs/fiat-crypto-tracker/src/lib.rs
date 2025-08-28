@@ -59,7 +59,7 @@ pub mod exchange_rate_tracker {
         // The config => hardcoded validator key
         let config = DelegateConfig {
             commit_frequency_ms: 1000,
-            validator: Some(Pubkey::from_str("J1tTgaa3z5D2s4gW2x2yZ2x2yZ2x2yZ2x2yZ2x2yZ2x2y").unwrap()), 
+            validator: Some(Pubkey::from_str("MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd").unwrap()), 
         };
         
         ctx.accounts.del.delegate(config)
