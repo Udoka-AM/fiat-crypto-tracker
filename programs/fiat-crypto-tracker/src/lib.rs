@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use std::str::FromStr;
 
 use ephemeral_rollups_sdk::{
     cpi::{
@@ -76,7 +77,7 @@ pub mod exchange_rate_tracker {
         // delegate config here
         let config = DelegateConfig {
             commit_frequency_ms: 1000, 
-            validator: Some(*ctx.accounts.authority.key), 
+            validator: Some(Pubkey::from_str("MUS3hc9TCw4cGC12vHNoYcCGzJG1txjgQLZWVoeNHNd").unwrap()), 
         };
 
        
@@ -109,6 +110,11 @@ pub mod exchange_rate_tracker {
 
         undelegate_account(
             CpiContext::new_with_signer(cpi_program, cpi_accounts, &[&seeds[..]]),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
         )?;
         
         Ok(())
